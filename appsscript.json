@@ -1,0 +1,11 @@
+{
+  "dataStudio": {
+    "name": "Columbo.io - Test",
+    "logoUrl": "https://raw.githubusercontent.com/npm/logos/master/%22npm%22%20lockup/npm-logo-simplifed-with-white-space.png",
+    "company": "diebesteallerzeiten.de",
+    "companyUrl": "https://www.diebesteallerzeiten.de",
+    "addonUrl": "https://github.com/flesheatingarthropods/columbo-ds-connector",
+    "supportUrl": "https://github.com/flesheatingarthropods/columbo-ds-connector/issues",
+    "description": "Get data from the Columbo.io QA tool."
+  }
+}
