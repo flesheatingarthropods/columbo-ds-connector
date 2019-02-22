@@ -1,4 +1,18 @@
 /**
+ *  Common variables
+ *
+ */
+
+
+connector = {
+  "baseurl":"https://api.columbo.io/accounts",
+  "staticUrl":"https://static.columbo.io",
+  "userNameKey":"dscc.username",
+  "tokenKey":"dscc.token",
+};
+
+
+/**
  *  Authentication
  *
  * Access to the Columbo.io API is controlled via email plus a user specific key, so presumably
@@ -42,8 +56,8 @@ function getAuthType() {
  */
 function resetAuth() {
   var user_tokenProperties = PropertiesService.getUserProperties();
-  user_tokenProperties.deleteProperty('dscc.username');
-  user_tokenProperties.deleteProperty('dscc.password');
+  user_tokenProperties.deleteProperty(connector.userNameKey);
+  user_tokenProperties.deleteProperty(connector.tokenKey);
 }
 
 
@@ -53,8 +67,8 @@ function resetAuth() {
  */
 function isAuthValid() {
   var userProperties = PropertiesService.getUserProperties();
-  var userName = userProperties.getProperty('dscc.username');
-  var token = userProperties.getProperty('dscc.token');
+  var userName = userProperties.getProperty(connector.userNameKey);
+  var token = userProperties.getProperty(connector.tokenKey);
   // This assumes you have a validateCredentials function that
   // can validate if the userName and token are correct.
   return validateCredentials(userName, token);
@@ -69,10 +83,11 @@ function isAuthValid() {
  */
 
 function validateCredentials(userName, token) {
-  if(userName.lengh > 0 && token.length > 0) {
-     return true;
+
+if (userName === null || token === null) {
+    return false;
   }
- return false;
+ return true;
 }
 
 
@@ -97,11 +112,15 @@ function setCredentials(request) {
     };
   }
   var userProperties = PropertiesService.getUserProperties();
-  userProperties.setProperty('dscc.username', userName);
-  userProperties.setProperty('dscc.token', token);
+  userProperties.setProperty(connector.userNameKey, userName);
+  userProperties.setProperty(connector.tokenKey, token);
   return {
     errorCode: 'NONE'
   };
+}
+
+function isAdminUser() {
+  return true;
 }
 
 
@@ -206,19 +225,23 @@ function getFields() {
   fields.newDimension()
       .setId('active')
       .setName('active')
-      .setType(types.Text);
+      .setType(types.TEXT);
+
+
+  fields.newDimension()
+      .setId('screenshot')
+      .setName('Screenshot Url')
+      .setType(types.TEXT);
 
   fields.newMetric()
       .setId('pages_scanned')
       .setName('Pages Scanned')
-      .setType(types.NUMBER)
-      .setAggregation(aggregations.SUM);
+      .setType(types.NUMBER);
 
   fields.newMetric()
       .setId('pages_found')
       .setName('Pages Found')
-      .setType(types.NUMBER)
-      .setAggregation(aggregations.SUM);
+      .setType(types.NUMBER);
 
   return fields;
 }
@@ -249,20 +272,25 @@ function getSchema(request) {
  * @param {string} packageName The package name.
  * @return {object} An object containing rows with values.
  */
-function responseToRows(requestedFields, response, packageName) {
+function responseToRows(requestedFields, response) {
+
+
   // Transform parsed data and filter for requested fields
-  return response.map(function(dailyDownload) {
+  return response.map(function(audit) {
+
     var row = [];
     requestedFields.asArray().forEach(function(field) {
       switch (field.getId()) {
         case 'audit_name':
-          return row.push(dailyDownload.name.replace(/-/g, ''));
+          return row.push(audit.name.replace(/-/g, ''));
         case 'last_sweep_at':
-          return row.push(dailyDownload.lastSweepAt);
+          return row.push(audit.lastSweepAt);
         case 'pages_scanned':
-          return row.push(dailyDownload.summary.pages.scanned);
+          return row.push(audit.summary.pages.scanned);
+        case 'screenshot':
+          return row.push([connector.staticUrl,audit.screenshot.directory,audit.screenshot.filename].join("/"));
         case 'pages_found':
-          return row.push(dailyDownload.summary.pages.found);
+          return row.push(audit.summary.pages.found);
         default:
           return row.push('');
       }
@@ -277,19 +305,38 @@ function responseToRows(requestedFields, response, packageName) {
  * @return {object} The data.
  */
 function getData(request) {
+
   var requestedFieldIds = request.fields.map(function(field) {
     return field.name;
   });
   var requestedFields = getFields().forIds(requestedFieldIds);
 
+  var userProperties = PropertiesService.getUserProperties();
+  var user = userProperties.getProperty(connector.userNameKey);
+  var token = userProperties.getProperty(connector.tokenKey);
+  var options = {};
+  options.headers = {"Authorization": "Basic " + Utilities.base64Encode(user + ":" + token)};
+
+
   // Fetch and parse data from API
   var url = [
-    'https://app.columbo.io/accounts/',
-    request.configParams.account
+    connector.baseurl,
+    "/",
+    request.configParams.account,
+    '/audits'
   ];
-  var response = UrlFetchApp.fetch(url.join(''));
-  var parsedResponse = JSON.parse(response).downloads;
-  var rows = responseToRows(requestedFields, parsedResponse, request.configParams.package);
+  var response = UrlFetchApp.fetch(url.join(''),options);
+  parsedResponse = JSON.parse(response);
+
+  try {
+   var rows = responseToRows(requestedFields, parsedResponse);
+  } catch (e) {
+    DataStudioApp.createCommunityConnector()
+      .newUserError()
+      .setDebugText('Error fetching data from API. Exception details: ' + e)
+      .setText('There was an error communicating with the service. Try again later, or file an issue if this error persists.')
+      .throwException();
+  }
 
   return {
     schema: requestedFields.build(),
