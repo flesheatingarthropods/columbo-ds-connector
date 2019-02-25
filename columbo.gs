@@ -5,10 +5,11 @@
 
 
 connector = {
-  "baseurl":"https://api.columbo.io/accounts",
+  "baseUrl":"https://api.columbo.io/accounts",
   "staticUrl":"https://static.columbo.io",
   "userNameKey":"dscc.username",
   "tokenKey":"dscc.token",
+  "adminUsers":['eike.pierstorff@idealo.de']
 };
 
 
@@ -120,7 +121,11 @@ function setCredentials(request) {
 }
 
 function isAdminUser() {
-  return true;
+  var email = Session.getEffectiveUser().getEmail();
+  if(connector.adminUsers.indexOf(email) > -1) {
+    return true;
+  }
+  return false;
 }
 
 
@@ -227,6 +232,15 @@ function getFields() {
       .setName('active')
       .setType(types.TEXT);
 
+  fields.newDimension()
+      .setId('tool_name')
+      .setName('Tool')
+      .setType(types.TEXT);
+
+  fields.newMetric()
+      .setId('pages_tools_found')
+      .setName('Pages with Tool found')
+      .setType(types.NUMBER);
 
   fields.newDimension()
       .setId('screenshot')
@@ -238,10 +252,6 @@ function getFields() {
       .setName('Pages Scanned')
       .setType(types.NUMBER);
 
-  fields.newMetric()
-      .setId('pages_found')
-      .setName('Pages Found')
-      .setType(types.NUMBER);
 
   return fields;
 }
@@ -255,6 +265,45 @@ function getSchema(request) {
   var fields = getFields().build();
   return {'schema': fields};
 }
+
+/**
+ * Columbo
+ *
+ */
+
+
+/**
+ * Constructs an object from the raw response that is easier to digest
+ * by "flattening" the nest JSON response into a one dimensional object
+ *
+ * @param {object[]} response The response.
+ * @return {object} An object containing rows with values.
+ */
+function prepareAuditData(response) {
+
+  // TODO flatten so that we get a one dimensional object with one row per tool,
+  // where each row contains audit name, screenshot, date, toolname, scanned, found pages
+
+  var rows = [];
+  for(i=0;i<response.length;i++) {
+    audit = response[i];
+
+    var tools = audit.summary.toolCoverage;
+    for(z=0;z<tools.length;z++) {
+      row = {};
+      row['name'] = audit.name;
+      row['lastSweepAt'] = audit.lastSweepAt;
+      row['pages_scanned'] = audit.summary.pages.scanned;
+      row['screenshot'] = [connector.staticUrl,audit.screenshot.directory,audit.screenshot.filename].join("/");
+      row['tool_name'] = tools[z][0];
+      row['pages_with_tool'] = tools[z][2];
+      rows.push(row);
+    }
+  }
+  return rows;
+
+}
+
 
 /**
  * Get Data
@@ -272,12 +321,41 @@ function getSchema(request) {
  * @param {string} packageName The package name.
  * @return {object} An object containing rows with values.
  */
-function responseToRows(requestedFields, response) {
 
+
+function responseToRows(requestedFields, response) {
 
   // Transform parsed data and filter for requested fields
   return response.map(function(audit) {
+    var row = [];
+    requestedFields.asArray().forEach(function(field) {
+      switch (field.getId()) {
+        case 'audit_name':
+          return row.push(audit.name.replace(/-/g, ''));
+        case 'last_sweep_at':
+          return row.push(audit.lastSweepAt);
+        case 'pages_scanned':
+          return row.push(audit.pages_scanned);
+        case 'screenshot':
+          return row.push(audit.screenshot);
+        case 'tool_name':
+            return row.push(audit.tool_name);
+        case 'pages_tools_found':
+          return row.push(audit.pages_with_tool);
+        default:
+          return row.push('');
+      }
+    });
+    return {values: row};
+  });
+}
 
+
+
+/* function responseToRows(requestedFields, response) {
+
+  // Transform parsed data and filter for requested fields
+  return response.map(function(audit) {
     var row = [];
     requestedFields.asArray().forEach(function(field) {
       switch (field.getId()) {
@@ -289,6 +367,8 @@ function responseToRows(requestedFields, response) {
           return row.push(audit.summary.pages.scanned);
         case 'screenshot':
           return row.push([connector.staticUrl,audit.screenshot.directory,audit.screenshot.filename].join("/"));
+        case 'tool_name':
+            return row.push(audit.summary.toolCoverage);
         case 'pages_found':
           return row.push(audit.summary.pages.found);
         default:
@@ -297,7 +377,7 @@ function responseToRows(requestedFields, response) {
     });
     return {values: row};
   });
-}
+} */
 
 /**
  * Gets the data for the community connector
@@ -320,20 +400,20 @@ function getData(request) {
 
   // Fetch and parse data from API
   var url = [
-    connector.baseurl,
+    connector.baseUrl,
     "/",
     request.configParams.account,
     '/audits'
   ];
   var response = UrlFetchApp.fetch(url.join(''),options);
-  parsedResponse = JSON.parse(response);
+  var parsedResponse = prepareAuditData(JSON.parse(response));
 
   try {
-   var rows = responseToRows(requestedFields, parsedResponse);
+    var rows = responseToRows(requestedFields, parsedResponse);
   } catch (e) {
     DataStudioApp.createCommunityConnector()
       .newUserError()
-      .setDebugText('Error fetching data from API. Exception details: ' + e)
+      .setDebugText('Error fetching data from API. Exception details: ' + parsedResponse.toString() + e)
       .setText('There was an error communicating with the service. Try again later, or file an issue if this error persists.')
       .throwException();
   }
